@@ -58,7 +58,7 @@ export function Reports({ warehouses, token, onBack, projects }: ReportsProps) {
   const [records, setRecords] = useState<MovementRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  const [typeFilter, setTypeFilter] = useState('todos');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState('');
@@ -74,6 +74,7 @@ export function Reports({ warehouses, token, onBack, projects }: ReportsProps) {
       if (selectedWarehouse) params.append('warehouseId', selectedWarehouse);
       if (fromDate) params.append('from', fromDate);
       if (toDate) params.append('to', toDate);
+      if (typeFilter && typeFilter !== 'todos') params.append('type', typeFilter);
 
       if (selectedProjectId) {
         const selectedProject = projects.find((p) => p.id === selectedProjectId);
@@ -265,7 +266,23 @@ export function Reports({ warehouses, token, onBack, projects }: ReportsProps) {
                   placeholder="Ingrese el proyecto"
                 />
               </div>
-            </div>
+
+
+    <div>
+      <label className="block text-xs font-medium text-slate-700 mb-1">
+        Tipo de Movimiento
+      </label>
+      <select
+        value={typeFilter}
+        onChange={(e) => setTypeFilter(e.target.value)}
+        className="border border-slate-300 rounded-md px-3 py-2 text-sm bg-white"
+      >
+        <option value="todos">Todos</option>
+        <option value="retiros">Retiros</option>
+        <option value="ingresos">Ingresos</option>
+      </select>
+    </div>
+  </div>
 
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={loadMovements}>

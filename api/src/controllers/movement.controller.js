@@ -3,24 +3,17 @@ const InventoryItem = require('../models/InventoryItem');
 const Warehouse = require('../models/Warehouse');
 const ExcelJS = require('exceljs');
 
-// Escapa caracteres especiales para regex
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Construye el filtro común para listados y exportaciones
- */
 function buildMovementFilter(query) {
-  const { warehouseId, from, to, project } = query;
+  const { warehouseId, from, to, project, type } = query;
   const filter = {};
 
-  if (warehouseId) {
-    filter.warehouse = warehouseId;
-  }
+  if (warehouseId) filter.warehouse = warehouseId;
 
   if (project) {
-    // Match EXACTO (case-insensitive) del nombre de proyecto
     const trimmed = project.trim();
     if (trimmed) {
       const escaped = escapeRegExp(trimmed);
@@ -30,53 +23,39 @@ function buildMovementFilter(query) {
 
   if (from || to) {
     filter.createdAt = {};
-    if (from) {
-      filter.createdAt.$gte = new Date(from);
-    }
+    if (from) filter.createdAt.$gte = new Date(from);
     if (to) {
       const toDate = new Date(to);
-      // incluir todo el día "to"
       toDate.setHours(23, 59, 59, 999);
       filter.createdAt.$lte = toDate;
     }
   }
 
+  // 🔹 filtrado por tipo de movimiento
+  if (type === 'retiros') {
+    // buscamos movimientos donde al menos un item tenga delta < 0
+    filter['items.delta'] = { $lt: 0 };
+  } else if (type === 'ingresos') {
+    // buscamos movimientos donde al menos un item tenga delta > 0
+    filter['items.delta'] = { $gt: 0 };
+  }
+
   return filter;
 }
 
-/**
- * GET /api/movements
- * Filtros opcionales:
- *  - warehouseId
- *  - from (YYYY-MM-DD)
- *  - to   (YYYY-MM-DD)
- *  - project (string, match exacto)
- */
 exports.getMovements = async (req, res, next) => {
   try {
     const filter = buildMovementFilter(req.query);
-
     const movements = await StockMovement.find(filter)
       .populate('user', 'username')
       .populate('warehouse', 'name')
       .sort({ createdAt: -1 });
-
     res.json(movements);
   } catch (err) {
     next(err);
   }
 };
 
-/**
- * POST /api/movements/confirm
- * Body:
- * {
- *   warehouseId: string,
- *   items: [{ itemId, delta }],
- *   requestedBy?: string,
- *   project?: string
- * }
- */
 exports.confirmMovements = async (req, res, next) => {
   try {
     const { warehouseId, items, requestedBy, project } = req.body;
@@ -88,28 +67,24 @@ exports.confirmMovements = async (req, res, next) => {
     }
 
     const warehouse = await Warehouse.findById(warehouseId);
-    if (!warehouse) {
+    if (!warehouse)
       return res.status(404).json({ message: 'Depósito no encontrado' });
-    }
 
     const movementItems = [];
 
     for (const entry of items) {
       const { itemId, delta } = entry;
-      if (!itemId || typeof delta !== 'number' || delta === 0) {
-        continue;
-      }
+      if (!itemId || typeof delta !== 'number' || delta === 0) continue;
 
       const item = await InventoryItem.findOne({
         _id: itemId,
         warehouse: warehouseId,
       });
 
-      if (!item) {
+      if (!item)
         return res
           .status(404)
           .json({ message: `Producto no encontrado (${itemId})` });
-      }
 
       const previousStock = item.currentStock;
       const newStock = previousStock + delta;
@@ -125,25 +100,22 @@ exports.confirmMovements = async (req, res, next) => {
 
       movementItems.push({
         inventoryItem: item._id,
-        itemName: item.name, // nombre congelado
+        itemName: item.name,
         delta,
         previousStock,
         newStock,
       });
     }
 
-    if (movementItems.length === 0) {
-      return res
-        .status(400)
-        .json({ message: 'No hay cambios válidos para aplicar.' });
-    }
+    if (movementItems.length === 0)
+      return res.status(400).json({ message: 'No hay cambios válidos.' });
 
     const movement = await StockMovement.create({
       user: req.user.id,
       warehouse: warehouseId,
       items: movementItems,
-      requestedBy: requestedBy?.trim() || undefined,
-      project: project?.trim() || undefined,
+      requestedBy: requestedBy?.trim() || null,
+      project: project?.trim() || null,
     });
 
     await movement.populate([
@@ -157,14 +129,9 @@ exports.confirmMovements = async (req, res, next) => {
   }
 };
 
-/**
- * GET /api/movements/export
- * Mismos filtros que getMovements, pero devuelve un Excel.
- */
 exports.exportMovements = async (req, res, next) => {
   try {
     const filter = buildMovementFilter(req.query);
-
     const movements = await StockMovement.find(filter)
       .populate('user', 'username')
       .populate('warehouse', 'name')
@@ -174,19 +141,27 @@ exports.exportMovements = async (req, res, next) => {
     const sheet = workbook.addWorksheet('Stock Movements');
 
     sheet.columns = [
-      { header: 'Date', key: 'date', width: 20 },
-      { header: 'Warehouse', key: 'warehouse', width: 25 },
-      { header: 'Requested By', key: 'requestedBy', width: 25 },
-      { header: 'Project', key: 'project', width: 25 },
-      { header: 'User (system)', key: 'user', width: 20 },
-      { header: 'Item', key: 'item', width: 30 },
-      { header: 'Delta', key: 'delta', width: 10 },
-      { header: 'Previous Stock', key: 'previousStock', width: 15 },
-      { header: 'New Stock', key: 'newStock', width: 15 },
+      { header: 'Fecha', key: 'date', width: 20 },
+      { header: 'Deposito', key: 'warehouse', width: 25 },
+      { header: 'Solicitado por', key: 'requestedBy', width: 25 },
+      { header: 'Proyecto', key: 'project', width: 25 },
+      { header: 'Usuario', key: 'user', width: 20 },
+      { header: 'Producto', key: 'item', width: 30 },
+      { header: 'C/Modificada', key: 'delta', width: 10 },
+      { header: 'Stock previo', key: 'previousStock', width: 15 },
+      { header: 'Nuevo stock', key: 'newStock', width: 15 },
     ];
 
     movements.forEach((m) => {
       m.items.forEach((it) => {
+        // Filtramos nuevamente en caso de que type esté activo
+        if (
+          req.query.type === 'retiros' && it.delta >= 0
+        ) return;
+        if (
+          req.query.type === 'ingresos' && it.delta <= 0
+        ) return;
+
         sheet.addRow({
           date: m.createdAt,
           warehouse: m.warehouse?.name || '',
@@ -201,9 +176,7 @@ exports.exportMovements = async (req, res, next) => {
       });
     });
 
-    // formato fecha
     sheet.getColumn('date').numFmt = 'yyyy-mm-dd hh:mm';
-
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
