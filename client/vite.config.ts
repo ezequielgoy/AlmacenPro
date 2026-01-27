@@ -40,7 +40,7 @@ export default defineConfig({
     open: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:4000', // backend Express
+        target: 'https://almacenpro.onrender.com', // backend Express
         changeOrigin: true,
       },
     },
